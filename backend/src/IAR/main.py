@@ -1,191 +1,126 @@
-import boto3
-from io import BytesIO
-import json
-import datetime
-import os
-# import PyPDF2
-from pdf2image import convert_from_path
-from PIL import Image
-import tempfile
-from botocore.config import Config
-import requests
-from PIL import Image
-import io
-from langchain.chains import LLMMathChain, LLMChain
-from langchain.agents.agent_types import AgentType
-from langchain.agents import Tool, initialize_agent
-from langchain.prompts import PromptTemplate
 from langchain_aws import ChatBedrock
+from pydantic import BaseModel, Field
+import base64
+from langchain_core.messages import HumanMessage
+from typing import List, Dict
+import os
+import re 
+import json
 
-images_dir = '/tmp/images'
-supported_image_formats = ('.jpeg', '.jpg', '.png')
+llm = ChatBedrock(
+    model_id="anthropic.claude-3-sonnet-20240229-v1:0",
+    model_kwargs={"temperature": 0},
+    region_name="ap-south-1",
+)
+ 
+class DamageReport(BaseModel):
+    image_name: str = Field(description="Name of the image")
+    damage_parts: List[str] = Field(description="List of damaged parts")
+ 
+conditions_report_initial_prompt = """You are an expert automotive inspector specializing in assessing damages from car accidents.
+Analyze the provided images of the damaged car and identify all types of damages visible.
+For each image, analyze and provide a detailed list of car components that show visible damage.
+Only include those components where damage is detected.
+RHS is Driver's side and LHS is passenger side of car so based on this decide the damage side of car.
+Use the following parts list to specify the damaged components and their condition:
+Parts List:
+ Front bumper.
+ Front grille upper.
+ Front grille lower.
+ Hood (Bonnet).
+ Front Windshield Glass.
+ Side View Mirror RHS.
+ Side View Mirror LHS.
+ Headlamp RHS.
+ Headlamp LHS.
+ Fog lamp RHS.
+ Fog lamp LHS.
+ Fender RHS.
+ Door Front RHS.
+ Door Rear RHS.
+ Quarter Panel RHS.
+ Tail lamp RHS.
+ Rear Bumper.
+ Tail Gate (Dicky).
+ Rear Windscreen Glass.
+ Tail Lamp LHS.
+ Quarter Panel LHS.
+ Door Rear LHS.
+ 
+For each detail, calculate the damage score, on the basis of score classify only one category below donot include score:
+- Dent
+- Scratch
+- Cracked
+- Broken
+ 
+"""
 
-s3 = boto3.client('s3')
-ssm_client = boto3.client('ssm')
-textract = boto3.client('textract')
-
-bedrock_runtime = boto3.client( 
-        service_name="bedrock-runtime",
-        region_name="us-east-1",
-    )
-
-data_json = {
-        "total bill amount": "",
-        "billing date": "",
-        "hospital bill number": "",
-        "room type":"",
-        "room charges": "",
-        "visit charges": "",
-        "surgeon charges": "",
-        "OT charges": "",
-        "Anesthesia charges": "",
-        "Assitant surgeon charges": "",
-        "Pathology charges": "",
-        "Pharmacy charges": "",
-        "Minor procedure charges": "",
-        "Radiology charges": "",
-        "other charges": ""
-    }
-
-data_json_str = json.dumps(data_json)
+def parse_damage_report(report: str, image_mapping: Dict[str, str]) -> Dict[str, List[str]]:
+    parsed_report = {}
+    sections = re.split(r'\n(?=Image \d+:)', report.strip())
+   
+    for section in sections:
+        lines = section.split('\n')
+        image_name = lines[0].strip()
+        damages = [line.strip() for line in lines[1:] if line.strip()]
+        # Correct the image name using the mapping
+        if image_name in image_mapping:
+            image_name = image_mapping[image_name]
+        parsed_report[image_name] = damages
+   
+    return parsed_report
 
 # @logger.inject_lambda_context(log_event=True)
 def lambda_handler(event, context):
-    job_id = event['job_id']
-    links = event.get('links', [])
-    print(f"Links received: {links}")
-    image_text = ""
-    pdf_image_text = ""
+    folder_path = r'/home/ubuntu/car-damage-assessment/Motor Vehicles/4'
 
-    # Download each file from the links
-    for link in links:
-        url_parts = link.split('/')
-        # print("url", url_parts)
-        bucket_name1 = url_parts[2]
-        if '.s3.amazonaws.com' in bucket_name1:
-            bucket_name = bucket_name1.rstrip('.s3.amazonaws.com')
-        else:
-            bucket_name = bucket_name1
+    # Step 1: Associate image numbers with filenames
+    image_mapping = {}
+    encoded_images = []
+    for i, filename in enumerate(sorted(os.listdir(folder_path)), 1):
+        if filename.endswith(('.png', '.jpg', '.jpeg')):
+            image_mapping[f"Image {i}"] = filename
+            with open(os.path.join(folder_path, filename), 'rb') as image_file:
+                encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+                encoded_images.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": encoded_image},
+                })
 
-        print("er",bucket_name)
-
-        object_key = '/'.join(url_parts[3:])
-        
-        print("key",object_key)
-
-        if object_key.lower().endswith(supported_image_formats):
-            # Call Textract to extract text from the image
-            textract_response = textract.detect_document_text(
-                Document={'S3Object': {'Bucket': bucket_name, 'Name': object_key}}
-            )
-
-            # Extract text blocks from the response
-            for block in textract_response['Blocks']:
-                if block['BlockType'] == 'LINE':
-                    image_text += block['Text'] + "\n"
-            # print("image_text_123", image_text)
-        elif object_key.lower().endswith('.pdf'):
-            local_path = '/tmp/' + object_key.split('/')[-1]
-            print("Local path:", local_path)
-            s3.download_file(bucket_name, object_key, local_path)
-
-            images = convert_from_path(local_path)
-            base_name = os.path.splitext(object_key.split('/')[-1])[0]
-            print("base_name",base_name)
-
-            # Process each image without uploading to S3
-            for i, image in enumerate(images):
-                image_file_name = f'{base_name}_{i+1}.png'
-                # Save the image to a BytesIO object
-                with io.BytesIO() as buffer:
-                    image.save(buffer, format='PNG')
-                    buffer.seek(0)
-                    
-                    # Send image to Textract
-                    textract_response = textract.detect_document_text(
-                        Document={'Bytes': buffer.getvalue()}
-                    )
-                    
-                    # Extract text blocks from the response
-                    for block in textract_response['Blocks']:
-                        if block['BlockType'] == 'LINE':
-                            pdf_image_text += block['Text'] + "\n"
-                    # print(f"Extracted text from {image_file_name}:", pdf_image_text)
-            # print(f"Extracted text from {image_file_name}:", pdf_image_text)
-
-    combined_text = image_text + pdf_image_text
-    
-
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 4000,
-        "temperature": 0,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": combined_text},
-                    {"type": "text", "text": "You are a document entity extraction specialist. Given above the document content, your task is to extract the text value of the following entities:"},
-                    {"type": "text", "text": data_json_str},
-                    {"type": "text", "text": "The JSON schema must be followed during the extraction.\nThe values must only include text found in the document."},
-                    {"type": "text", "text": "Do not normalize any entity value."},
-                    {"type": "text", "text": "Don’t include “Rs” while extracting values."},
-                    {"type": "text", "text": "If an entity is not found in the document, set the entity value to null."},
-                    # {"type": "text", "text": "For each entity, provide the extracted value and a detailed explanation of how you arrived at this extraction. Include specific references to the text from the document that led to your extraction decision. For 'visit charges,' ensure to correctly calculate based on the number of occurrences in the document and verify the number of visits. If there are discrepancies, note them clearly.use the total value for calculation"},
-                    {"type": "text", "text": "For visiting charges , only take visitng charges keyword please ignore any other charge for the calculation other than visit charge keyword and if the visit charge is 0 then dont take in to count for the occurences and justify the calculation.Dont take charges other than visit charges for visiting charges"},
-                    {"type": "text", "text": "For Visting charges just mention no . of occurence of visitng charges with their costing of each particularly and then calculate and also remember strictly take only visit keyword only for this"},
-                    {"type": "text", "text": "For Billing date , we only need to take the billing date of hospital bill only"},
-                    {"type": "text", "text": "For Room charges include room charges + nursing charges also"},
-                    {"type": "text", "text": "For Room type only get the type keyword"},
-                    {"type": "text", "text": "Only return the values for each json (dont include explanation or calculation)"},
-                    # {"type": "text", "text": "For each entity, provide the extracted value and an explanation of how you arrived at this extraction. Include specific references to the text from the document that led to your extraction decision."},
-                    #  {"type": "text", "text": "For each entity, provide the extracted value and a detailed explanation of how you arrived at this extraction. Include specific references to the text from the document that led to your extraction decision. For 'visit charges,' provide the exact line or section from the document used to determine the charge amount and verify the number of visits if mentioned. If the explanation includes calculations, ensure that they are based on verifiable document content."}
-                ],
-            }
-        ],
-    })
-
-    response = bedrock_runtime.invoke_model(
-        modelId="anthropic.claude-3-sonnet-20240229-v1:0",
-        body=body
+    # Step 2: Send the images with corresponding image numbers in the prompt
+    message = HumanMessage(
+        content=[
+            {"type": "text", "text": conditions_report_initial_prompt},
+            *encoded_images
+        ]
     )
 
-    # # Read and parse the response
-    response_body = json.loads(response.get("body").read())
-
-    # Extracted entities
-    print("Response from Bedrock model:")
-    print(response_body)
-    result = response_body['content'][0]['text']
-
-     # Parse the result string to JSON
-    try:
-        result_json = json.loads(result)
-        # print(json.dumps(result_json, indent=4))
-    except json.JSONDecodeError as e:
-        print(f"JSON decode error: {e}")
-        result_json = {"error": "Failed to parse JSON response"}
-
-
-
-    # response_value = "Example Response from Secondary Lambda"
-
-    combined_result = {
-        "status": "Done",
-        "response": result_json
-    }
-
-    combined_result_str = json.dumps(combined_result)
-
-    ssm_client.put_parameter(
-        Name=job_id,
-        Value=combined_result_str,
-        Type='String',
-        Overwrite=True
-    )
+    # Invoke the model
+    llm_out = llm.invoke([message])
     
+    # Extract content from AIMessage
+    if hasattr(llm_out, 'content'):
+        report_content = llm_out.content
+    else:
+        report_content = str(llm_out)  # Fallback if content attribute is not found
+    
+    # Parse the report
+    parsed_report = parse_damage_report(report_content, image_mapping)
 
-    # print(result)
+    # Print the parsed report
+    for image, damages in parsed_report.items():
+        print(f"{image}:")
+        for damage in damages:
+            print(f"  - {damage}")
+    
+    output_string = ""
+ 
+    # Loop through the parsed report and append each line to the output_string
+    for image, damages in parsed_report.items():
+        output_string += f"{image}:\n"
+        for damage in damages:
+            output_string += f"  - {damage}\n"
+
 
     return {
         "statusCode": 200,
@@ -195,5 +130,5 @@ def lambda_handler(event, context):
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "*",
         },
-        "body": json.dumps(combined_result_str),
+        "body": json.dumps(output_string),
     }
