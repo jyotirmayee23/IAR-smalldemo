@@ -70,8 +70,9 @@ def parse_damage_report(report: str, image_mapping: Dict[str, str]) -> Dict[str,
    
     return parsed_report
 
-# @logger.inject_lambda_context(log_event=True)
 def lambda_handler(event, context):
+    print("12",event)
+    print("13",context)
     folder_path = r'/home/ubuntu/car-damage-assessment/Motor Vehicles/4'
 
     # Step 1: Associate image numbers with filenames
