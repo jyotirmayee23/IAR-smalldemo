@@ -1,9 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  serverless-pdf-chat
+  Document Extraction
 
-  SAM Template for serverless-pdf-chat
+  SAM Template for Nucleon
 
 Globals:
   Function:
@@ -15,677 +15,129 @@ Globals:
     Environment:
       Variables:
         LOG_LEVEL: INFO
-    Layers:
-      - !Sub arn:aws:lambda:${AWS::Region}:017000801446:layer:AWSLambdaPowertoolsPythonV2-Arm64:51
 
-Parameters:
-  Frontend:
-    Default: local
-    Type: String
-    AllowedValues:
-      - local
-      - amplify
-  Repository:
-    Type: String
-
-Conditions:
-  DeployToAmplifyHosting: !Equals
-    - !Ref Frontend
-    - amplify
-
-Resources:
-  DocumentBucket:
-    Type: "AWS::S3::Bucket"
-    Properties:
-      BucketName: !Sub "${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
-      CorsConfiguration:
-        CorsRules:
-          - AllowedHeaders:
-              - "*"
-            AllowedMethods:
-              - GET
-              - PUT
-              - HEAD
-              - POST
-              - DELETE
-            AllowedOrigins:
-              - "*"
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-
-  MyOAI:
-    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
-    Properties:
-      CloudFrontOriginAccessIdentityConfig:
-        Comment: "OAI for accessing S3 content via CloudFront"
-
-  MyCloudFrontDistribution:
-    Type: AWS::CloudFront::Distribution
-    Properties:
-      DistributionConfig:
-        Origins:
-          - DomainName: !GetAtt DocumentBucket.DomainName
-            Id: MyS3Origin
-            S3OriginConfig:
-              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${MyOAI}"
-        Enabled: true
-        DefaultRootObject: index.html
-        DefaultCacheBehavior:
-          TargetOriginId: MyS3Origin
-          ViewerProtocolPolicy: redirect-to-https
-          AllowedMethods:
-            - GET
-            - HEAD
-            - OPTIONS
-          CachedMethods:
-            - GET
-            - HEAD
-            - OPTIONS
-          ForwardedValues:
-            QueryString: false
-            Cookies:
-              Forward: none
-            Headers:
-              - Referer
-
-  DocumentBucketPolicy:
-    Type: "AWS::S3::BucketPolicy"
-    Properties:
-      Bucket: !Ref DocumentBucket  # Add this line to specify the bucket for the policy
-      PolicyDocument:
-        Id: EnforceHttpsPolicy
-        Version: "2012-10-17"
-        Statement:
-          - Sid: EnforceHttpsSid
-            Effect: Deny
-            Principal: "*"
-            Action: "s3:*"
-            Resource:
-              - !Sub "arn:aws:s3:::${DocumentBucket}/*"
-              - !Sub "arn:aws:s3:::${DocumentBucket}"
-            Condition:
-              Bool:
-                "aws:SecureTransport": "false"
-          - Sid: AllowCloudFrontAccess
-            Effect: Allow
-            Principal: 
-              CanonicalUser: !GetAtt MyOAI.S3CanonicalUserId
-            Action: "s3:GetObject"
-            Resource:
-              - !Sub "arn:aws:s3:::${DocumentBucket}/*"
-              
-  EmbeddingQueue:
-    Type: AWS::SQS::Queue
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
-    Properties:
-      VisibilityTimeout: 180
-      MessageRetentionPeriod: 3600
-
-  EmbeddingQueuePolicy:
-    Type: AWS::SQS::QueuePolicy
-    Properties:
-      Queues:
-        - !Ref EmbeddingQueue
-      PolicyDocument:
-        Version: "2012-10-17"
-        Id: SecureTransportPolicy
-        Statement:
-          - Sid: AllowSecureTransportOnly
-            Effect: Deny
-            Principal: "*"
-            Action: "SQS:*"
-            Resource: "*"
-            Condition:
-              Bool:
-                aws:SecureTransport: false
-
-  2Queue:
-    Type: AWS::SQS::Queue
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
-    Properties:
-      VisibilityTimeout: 180
-      MessageRetentionPeriod: 3600
-
-  2QueuePolicy:
-    Type: AWS::SQS::QueuePolicy
-    Properties:
-      Queues:
-        - !Ref 2Queue
-      PolicyDocument:
-        Version: "2012-10-17"
-        Id: SecureTransportPolicy2
-        Statement:
-          - Sid: AllowSecureTransportOnly
-            Effect: Deny
-            Principal: "*"
-            Action: "SQS:*"
-            Resource: "*"
-            Condition:
-              Bool:
-                aws:SecureTransport: false
-
-  DocumentTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
-    Properties:
-      KeySchema:
-        - AttributeName: userid
-          KeyType: HASH
-        - AttributeName: documentid
-          KeyType: RANGE
-      AttributeDefinitions:
-        - AttributeName: userid
-          AttributeType: S
-        - AttributeName: documentid
-          AttributeType: S
-      BillingMode: PAY_PER_REQUEST
-
-  MemoryTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
-    Properties:
-      KeySchema:
-        - AttributeName: SessionId
-          KeyType: HASH
-      AttributeDefinitions:
-        - AttributeName: SessionId
-          AttributeType: S
-      BillingMode: PAY_PER_REQUEST
-
-  CognitoUserPool:
-    Type: AWS::Cognito::UserPool
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
-    Properties:
-      AutoVerifiedAttributes:
-        - email
-      UsernameAttributes:
-        - email
-      AdminCreateUserConfig:
-        AllowAdminCreateUserOnly: true
-      Policies:
-        PasswordPolicy:
-          MinimumLength: 8
-          RequireLowercase: true
-          RequireNumbers: true
-          RequireSymbols: true
-          RequireUppercase: true
-
-  CognitoUserPoolClient:
-    Type: AWS::Cognito::UserPoolClient
-    Properties:
-      UserPoolId: !Ref CognitoUserPool
-      ClientName: !Ref CognitoUserPool
-      GenerateSecret: false
-
+Resources:    
   Api:
     Type: AWS::Serverless::Api
     Properties:
       StageName: dev
-      Auth:
-        DefaultAuthorizer: CognitoAuthorizer
-        AddDefaultAuthorizerToCorsPreflight: false
-        Authorizers:
-          CognitoAuthorizer:
-            UserPoolArn: !GetAtt CognitoUserPool.Arn
       Cors:
         AllowOrigin: "'*'"
         AllowHeaders: "'*'"
         AllowMethods: "'*'"
 
-  GeneratePresignedUrlFunction:
+  NucleonFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/generate_presigned_url/
-      Policies:
-        - S3CrudPolicy:
-            BucketName: !Ref DocumentBucket
-      Environment:
-        Variables:
-          BUCKET: !Ref DocumentBucket
-          REGION: !Sub ${AWS::Region}
-      Events:
-        Root:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /generate_presigned_url
-            Method: GET
-  
-  FullGeneratePresignedUrlFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/Full_generate_presigned_url/
-      Policies:
-        - S3CrudPolicy:
-            BucketName: !Ref DocumentBucket
-      Environment:
-        Variables:
-          BUCKET: !Ref DocumentBucket
-          REGION: !Sub ${AWS::Region}
-      Events:
-        Root:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /Full_generate_presigned_url
-            Method: GET
-
-  UploadTriggerFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/upload_trigger/
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref DocumentTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MemoryTable
-        - S3ReadPolicy:
-            BucketName: !Sub "${AWS::StackName}-${AWS::Region}-${AWS::AccountId}*"
-        - SQSSendMessagePolicy:
-            QueueName: !GetAtt EmbeddingQueue.QueueName
-      Environment:
-        Variables:
-          DOCUMENT_TABLE: !Ref DocumentTable
-          MEMORY_TABLE: !Ref MemoryTable
-          QUEUE: !GetAtt EmbeddingQueue.QueueName
-          BUCKET: !Sub "${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
-      Events:
-        S3EventPdf:
-          Type: S3
-          Properties:
-            Bucket: !Ref DocumentBucket
-            Events:
-              - s3:ObjectCreated:*
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: uploads/
-                  - Name: suffix
-                    Value: .pdf
-        S3EventCsv:
-          Type: S3
-          Properties:
-            Bucket: !Ref DocumentBucket
-            Events:
-              - s3:ObjectCreated:*
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: uploads/
-                  - Name: suffix
-                    Value: .csv
-        S3Eventtxt:
-          Type: S3
-          Properties:
-            Bucket: !Ref DocumentBucket
-            Events:
-              - s3:ObjectCreated:*
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: uploads/
-                  - Name: suffix
-                    Value: .txt
-        S3Eventdocx:
-          Type: S3
-          Properties:
-            Bucket: !Ref DocumentBucket
-            Events:
-              - s3:ObjectCreated:*
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: uploads/
-                  - Name: suffix
-                    Value: .docx
-
-  FullUploadTriggerFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/Full_upload_trigger/
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref DocumentTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MemoryTable
-        - S3ReadPolicy:
-            BucketName: !Sub "${AWS::StackName}-${AWS::Region}-${AWS::AccountId}*"
-        - SQSSendMessagePolicy:
-            QueueName: !GetAtt EmbeddingQueue.QueueName
-      Environment:
-        Variables:
-          DOCUMENT_TABLE: !Ref DocumentTable
-          MEMORY_TABLE: !Ref MemoryTable
-          QUEUE: !GetAtt EmbeddingQueue.QueueName
-          BUCKET: !Sub "${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
-      Events:
-        Root:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /Full_upload_trigger
-            Method: GET
-
-  MondayUploadTriggerFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/Monday_upload_trigger/
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref DocumentTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MemoryTable
-        - S3ReadPolicy:
-            BucketName: !Sub "${AWS::StackName}-${AWS::Region}-${AWS::AccountId}*"
-        - SQSSendMessagePolicy:
-            QueueName: !GetAtt 2Queue.QueueName
-      Environment:
-        Variables:
-          DOCUMENT_TABLE: !Ref DocumentTable
-          MEMORY_TABLE: !Ref MemoryTable
-          QUEUE: !GetAtt 2Queue.QueueName
-          BUCKET: !Sub "${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
-      Events:
-        Root:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /Monday_upload_trigger
-            Method: POST
-  
-  DeleteHistoryTriggerFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/Delete_History/
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref DocumentTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MemoryTable
-      Environment:
-        Variables:
-          DOCUMENT_TABLE: !Ref DocumentTable
-          MEMORY_TABLE: !Ref MemoryTable
-      Events:
-        Root:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /Delete_History
-            Method: Delete
-
-  DeleteFullTriggerFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/Delete_Full/
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref DocumentTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MemoryTable
-        - S3CrudPolicy:
-            BucketName: !Sub "${AWS::StackName}-${AWS::Region}-${AWS::AccountId}*"
-            Actions:
-              - s3:DeleteObject
-      Environment:
-        Variables:
-          DOCUMENT_TABLE: !Ref DocumentTable
-          MEMORY_TABLE: !Ref MemoryTable
-          BUCKET: !Sub "${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
-      Events:
-        Root:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /Delete_Full
-            Method: delete
-
-  GetDocumentFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/get_document/
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref DocumentTable
-        - DynamoDBReadPolicy:
-            TableName: !Ref MemoryTable
-      Environment:
-        Variables:
-          DOCUMENT_TABLE: !Ref DocumentTable
-          MEMORY_TABLE: !Ref MemoryTable
-      Events:
-        Root:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /doc/{documentid}/{conversationid}
-            Method: GET
-
-  GetAllDocuments:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/get_all_documents/
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref DocumentTable
-      Environment:
-        Variables:
-          DOCUMENT_TABLE: !Ref DocumentTable
-      Events:
-        Root:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /doc
-            Method: GET
-
-  AddConversationFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/add_conversation/
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref DocumentTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MemoryTable
-      Environment:
-        Variables:
-          DOCUMENT_TABLE: !Ref DocumentTable
-          MEMORY_TABLE: !Ref MemoryTable
-      Events:
-        Root:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /doc/{documentid}
-            Method: POST
-
-  GenerateEmbeddingsFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/generate_embeddings/
-      Timeout: 180
+      CodeUri: src/Nucleon/
+      Timeout: 480
       MemorySize: 2048
       Policies:
-        - SQSPollerPolicy:
-            QueueName: !GetAtt EmbeddingQueue.QueueName
-        - S3CrudPolicy:
-            BucketName: !Ref DocumentBucket
-        - DynamoDBCrudPolicy:
-            TableName: !Ref DocumentTable
         - Statement:
-            - Sid: "BedrockScopedAccess"
+            - Sid: "FullAccessToS3Bucket"
               Effect: "Allow"
-              Action: "bedrock:InvokeModel"
-              Resource: "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v1"
-      Environment:
-        Variables:
-          DOCUMENT_TABLE: !Ref DocumentTable
-          BUCKET: !Ref DocumentBucket
-      Events:
-        EmbeddingQueueEvent:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt EmbeddingQueue.Arn
-            BatchSize: 1
-
-  FullGenerateEmbeddingsFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/Full_generate_embeddings/
-      Timeout: 180
-      MemorySize: 2048
-      Policies:
-        - SQSPollerPolicy:
-            QueueName: !GetAtt EmbeddingQueue.QueueName
-        - S3CrudPolicy:
-            BucketName: !Ref DocumentBucket
-        - DynamoDBCrudPolicy:
-            TableName: !Ref DocumentTable
-        - Statement:
-            - Sid: "BedrockScopedAccess"
-              Effect: "Allow"
-              Action: "bedrock:InvokeModel"
-              Resource: "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v1"
-      Environment:
-        Variables:
-          DOCUMENT_TABLE: !Ref DocumentTable
-          BUCKET: !Ref DocumentBucket
-      Events:
-        Root:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /Full_generate_embeddings
-            Method: GET
-  
-  MondayGenerateEmbeddingsFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/Monday_generate_embeddings/
-      Timeout: 180
-      MemorySize: 2048
-      Policies:
-        - SQSPollerPolicy:
-            QueueName: !GetAtt 2Queue.QueueName
-        - S3CrudPolicy:
-            BucketName: !Ref DocumentBucket
-        - DynamoDBCrudPolicy:
-            TableName: !Ref DocumentTable
-        - Statement:
-            - Sid: "BedrockScopedAccess"
-              Effect: "Allow"
-              Action: "bedrock:InvokeModel"
-              Resource: "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v1"
-      Environment:
-        Variables:
-          DOCUMENT_TABLE: !Ref DocumentTable
-          BUCKET: !Ref DocumentBucket
-      Events:
-        EmbeddingQueueEvent:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt 2Queue.Arn
-            BatchSize: 1
-
-  GenerateResponseFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/generate_response/
-      Timeout: 30
-      MemorySize: 2048
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MemoryTable
-        - S3CrudPolicy:
-            BucketName: !Ref DocumentBucket
-        - Statement:
-            - Sid: "BedrockScopedAccess"
-              Effect: "Allow"
-              Action: "bedrock:InvokeModel"
+              Action:
+                - "s3:*"
               Resource:
-                - "arn:aws:bedrock:*::foundation-model/anthropic.claude-v2"
-                - "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v1"
+                - "arn:aws:s3:::nucleon-test-bucket"
+                - "arn:aws:s3:::nucleon-test-bucket/*"
+        - Statement:
+            - Sid: "BedrockScopedAccess"
+              Effect: "Allow"
+              Action:
+                - "bedrock:InvokeModel"
+              Resource:
+                - "arn:aws:bedrock:*::foundation-model/*"
+        - Statement:
+            - Sid: "FullAccessToTextract"
+              Effect: "Allow"
+              Action:
+                - "textract:*"
+              Resource: "*"
+        - Statement:
+            - Sid: "SSMAccess"
+              Effect: "Allow"
+              Action:
+                - "ssm:GetParameter"
+                - "ssm:GetParameters"
+                - "ssm:GetParametersByPath" # Add other SSM actions as needed
+                - "ssm:PutParameter"
+              Resource: "*"
       Environment:
         Variables:
-          MEMORY_TABLE: !Ref MemoryTable
-          BUCKET: !Ref DocumentBucket
+          FOLDER_PATH: "final-testing/final-testing/Banyan-Hospital/SUNIL-JOHARY"
       Events:
         Root:
           Type: Api
           Properties:
             RestApiId: !Ref Api
-            Path: /{documentid}/{conversationid}
+            Path: /Nucleon
+            Method: POST
+      
+  RequestApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/Request_api/
+      Timeout: 480
+      MemorySize: 2048
+      Policies:
+        - Statement:
+            - Sid: "InvokeRequestApiFunction"
+              Effect: "Allow"
+              Action: "lambda:InvokeFunction"
+              Resource: !GetAtt NucleonFunction.Arn
+              # NUCLEON_FUNCTION_ARN: !GetAtt NucleonFunction.Arn
+        - Statement:
+            - Sid: "FullAccessToS3Bucket"
+              Effect: "Allow"
+              Action:
+                - "s3:*"
+              Resource:
+                - "arn:aws:s3:::nucleon-test-bucket"
+                - "arn:aws:s3:::nucleon-test-bucket/*"
+                - "arn:aws:s3:::nucleus-demo-jyoti/*"
+                - "arn:aws:s3:::nucleus-demo-jyoti/"
+        - Statement:
+            - Sid: "SSMAccess"
+              Effect: "Allow"
+              Action:
+                - "ssm:GetParameter"
+                - "ssm:GetParameters"
+                - "ssm:GetParametersByPath" # Add other SSM actions as needed
+                - "ssm:PutParameter"
+              Resource: "*"
+      Environment:
+        Variables:
+          FOLDER_PATH: "final-testing/final-testing/Banyan-Hospital/SUNIL-JOHARY"
+          NUCLEON_FUNCTION_ARN: !GetAtt NucleonFunction.Arn
+      Events:
+        Root:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /requestapi
             Method: POST
 
-  AmplifyApp:
-    Type: AWS::Amplify::App
-    Condition: DeployToAmplifyHosting
+  ResponseApiFunction:
+    Type: AWS::Serverless::Function
     Properties:
-      Name: !Sub "${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
-      Repository: !Ref Repository
-      BuildSpec: |
-        version: 1
-        applications:
-          - frontend:
-              phases:
-                preBuild:
-                  commands:
-                    - npm install
-                build:
-                  commands:
-                    - npm run build
-              artifacts:
-                baseDirectory: dist
-                files:
-                  - '**/*'
-              cache:
-                paths:
-                  - node_modules/**/*
-            appRoot: frontend
-      AccessToken: "{{resolve:secretsmanager:serverless-pdf-chat-github-token}}"
-      EnvironmentVariables:
-        - Name: AMPLIFY_MONOREPO_APP_ROOT
-          Value: frontend
-        - Name: VITE_REGION
-          Value: !Ref AWS::Region
-        - Name: VITE_API_ENDPOINT
-          Value: !Sub "https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/dev/"
-        - Name: VITE_USER_POOL_ID
-          Value: !Ref CognitoUserPool
-        - Name: VITE_USER_POOL_CLIENT_ID
-          Value: !Ref CognitoUserPoolClient
-        - Name: VITE_CLOUDFRONT_DISTRIBUTION
-          Value: !GetAtt MyCloudFrontDistribution.DomainName
-
-  AmplifyBranch:
-    Type: AWS::Amplify::Branch
-    Condition: DeployToAmplifyHosting
-    Properties:
-      BranchName: new_feature_v1
-      AppId: !GetAtt AmplifyApp.AppId
-      EnableAutoBuild: true
-
-Outputs:
-  CognitoUserPool:
-    Value: !Ref CognitoUserPool
-  CognitoUserPoolClient:
-    Value: !Ref CognitoUserPoolClient
-  ApiGatewayBaseUrl:
-    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/dev/"
-  AmplifyAppId:
-    Value: !GetAtt AmplifyApp.AppId
-  CloudFrontDistributionDomain:
-    Value: !GetAtt MyCloudFrontDistribution.DomainName
+      CodeUri: src/Response_api/
+      Timeout: 480
+      MemorySize: 2048
+      Policies:
+        - Statement:
+            - Sid: "SSMAccess"
+              Effect: "Allow"
+              Action:
+                - "ssm:GetParameter"
+                - "ssm:GetParameters"
+                - "ssm:GetParametersByPath" # Add other SSM actions as needed
+                - "ssm:PutParameter"
+              Resource: "*"
+      Events:
+        Root:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /responseapi
+            Method: POST
