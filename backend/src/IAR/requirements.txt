@@ -1,0 +1,9 @@
+
+boto3
+botocore
+faiss-cpu
+langchain
+langchain-community
+pdf2image
+Pillow
+langchain_aws
