@@ -17,6 +17,28 @@ Globals:
         LOG_LEVEL: INFO
 
 Resources:    
+  DocumentBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - HEAD
+              - POST
+              - DELETE
+            AllowedOrigins:
+              - "*"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
   Api:
     Type: AWS::Serverless::Api
     Properties:
@@ -26,7 +48,7 @@ Resources:
         AllowHeaders: "'*'"
         AllowMethods: "'*'"
 
-  NucleonFunction:
+  IARFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/IAR/
@@ -39,8 +61,8 @@ Resources:
               Action:
                 - "s3:*"
               Resource:
-                - "arn:aws:s3:::IAR-car-damage-folder"
-                - "arn:aws:s3:::IAR-car-damage-folder/*"
+                - !Sub "arn:aws:s3:::${DocumentBucket}/*"
+                - !Sub "arn:aws:s3:::${DocumentBucket}"
         - Statement:
             - Sid: "BedrockScopedAccess"
               Effect: "Allow"
@@ -48,15 +70,35 @@ Resources:
                 - "bedrock:InvokeModel"
               Resource:
                 - "arn:aws:bedrock:*::foundation-model/*"
-      Environment:
-        Variables:
-          FOLDER_PATH: "final-testing/final-testing/Banyan-Hospital/SUNIL-JOHARY"
       Events:
         Root:
           Type: Api
           Properties:
             RestApiId: !Ref Api
             Path: /IAR
+            Method: POST
+
+  UploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/upload/
+      Timeout: 480
+      MemorySize: 2048
+      Policies:
+        - Statement:
+            - Sid: "FullAccessToS3Bucket"
+              Effect: "Allow"
+              Action:
+                - "s3:*"
+              Resource:
+                - !Sub "arn:aws:s3:::${DocumentBucket}/*"
+                - !Sub "arn:aws:s3:::${DocumentBucket}"
+      Events:
+        Root:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /upload     
             Method: POST
       
  
